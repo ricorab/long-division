@@ -473,25 +473,31 @@ function inFriendlyList(rn, rd) {
   const [a, b] = stripCommon(rn, rd);
   return FRIENDLY_PAIRS.some(([x, y]) => { const [p, q] = stripCommon(x, y); return p === a && q === b; });
 }
+/* Estimate is in the right ballpark: same place value as the real quotient, or within half to double of it (2,000 ÷ 20 = 100 for 1,987 ÷ 21 is fine). */
+function sameScale(q, trueQ) { return String(q).length === String(trueQ).length || (trueQ > 0 && q / trueQ >= 0.5 && q / trueQ <= 2); }
 function placeOfNumber(q) { return PLACES[String(q).length - 1] || "higher"; }
 
 /* Is rn ÷ rd something a 5th grader can do in their head?  → {friendly, tier: "easy"|"borderline", q, fact, reason} */
 function classifyPair(rn, rd) {
   if (!(rn > 0) || !(rd > 0)) return { friendly: false, reason: "zero" };
   const a = sig(rn), b = sig(rd);
-  if (a.m > 99 || b.m > 99) return { friendly: false, reason: "digits" };
+  if (a.m > 199 || b.m > 99) return { friendly: false, reason: "digits" };
   if (rn < rd) return { friendly: false, reason: "small" };
   if (rn % rd !== 0) return { friendly: false, reason: "uneven" };
   const q = rn / rd, qs = sig(q).m;
-  const fact = b.m <= 9 ? { F: b.m * qs, b: b.m, qs } : null;
-  if (inFriendlyList(rn, rd)) return { friendly: true, tier: "easy", q, fact };
-  if (b.m === 1) return { friendly: true, tier: "easy", q, fact: null };          // ÷ 10, 100, 1000: just cross off zeros
-  if (b.m <= 9 && qs <= 9) {                                                        // a times-table fact, scaled by tens
+  const fact = { F: b.m * qs, b: b.m, qs };
+  const yes = (tier, extra) => Object.assign({ friendly: true, tier, q, fact: b.m === 1 ? null : fact }, extra || {});
+  if (inFriendlyList(rn, rd)) return yes("easy");
+  if (b.m === 1) return yes("easy");                                    // ÷ 10, 100, 1000: just cross off zeros
+  if (b.m <= 9 && qs <= 9) {                                            // a times-table fact, scaled by tens
     const F = b.m * qs;
-    const easy = F < 10 || F % 10 === 0 || b.m === 2;
-    return { friendly: true, tier: easy ? "easy" : "borderline", q, fact };
+    return yes(F < 10 || F % 10 === 0 || b.m === 2 || b.m === 5 ? "easy" : "borderline");
   }
-  if (b.m === 25 && qs <= 8) return { friendly: true, tier: qs <= 4 ? "easy" : "borderline", q, fact: null, quarters: true }; // think quarters: 4 in 100
+  if (b.m <= 12 && qs <= 12) return yes("easy");                        // 11s and 12s facts: 2400 ÷ 12, 1320 ÷ 11
+  if (b.m === 2 || b.m === 5) return yes("easy");                       // halving, or ÷5 = double then ÷10: 1600 ÷ 50 = 32
+  if (b.m === 25) return yes("easy", { quarters: true });               // ÷25 = ×4 then ÷100: 1600 ÷ 25 = 64, 3500 ÷ 25 = 140
+  if ((b.m === 15 || b.m === 75) && qs <= 12) return yes("easy");       // 15s facts: 1500 ÷ 15, 1200 ÷ 15
+  if (qs === 1 || qs === 2) return yes("easy");                         // same number or double: 1400 ÷ 14, 2800 ÷ 14
   return { friendly: false, reason: "fact", q };
 }
 
@@ -502,7 +508,7 @@ function estimateCandidates(N, d) {
   const rds = new Set([d]);
   const p = Math.pow(10, String(d).length - 1);
   for (let k = 1; k <= 10; k++) rds.add(k * p);
-  if (d >= 10) { rds.add(25); rds.add(50); }
+  if (d >= 10) { rds.add(15); rds.add(25); rds.add(50); }
   const rns = new Set();
   const pn = Math.pow(10, String(N).length - 1);
   for (const P2 of [pn, pn / 10]) if (P2 >= 1) { rns.add(Math.floor(N / P2) * P2); rns.add(Math.ceil(N / P2) * P2); rns.add(Math.round(N / P2) * P2); }
@@ -517,7 +523,7 @@ function estimateCandidates(N, d) {
       const key = rn + "/" + rd; if (seen.has(key)) continue; seen.add(key);
       const c = classifyPair(rn, rd);
       if (!c.friendly) continue;
-      const placeMatch = String(c.q).length === String(trueQ).length;
+      const placeMatch = sameScale(c.q, trueQ);
       const score = Math.abs(Math.log(rn / N)) + Math.abs(Math.log(rd / d)) + (c.tier === "borderline" ? 0.4 : 0) + (rd < d ? 0.15 : 0) + (rd === d ? -0.05 : 0) + (plainRound.has(rn) ? 0 : 0.2) + (placeMatch ? 0 : 5);
       out.push({ rn, rd, q: c.q, tier: c.tier, fact: c.fact, placeMatch, score });
     }
@@ -545,14 +551,14 @@ function estimateNudge(N, d, rn, rd) {
   if (sr.m > 9) {                                   // e.g. 150 → round UP to 200
     const p = Math.pow(10, String(rd).length - 1), up = Math.ceil(rd / p) * p;
     const c = classifyPair(rn, up);
-    const fits = c.friendly && String(c.q).length === String(Math.floor(N / d)).length;   // only nudge where it will pass
+    const fits = c.friendly && sameScale(c.q, Math.floor(N / d));   // only nudge where it will pass
     if (fits && rn / N >= 0.5 && rn / N <= 2 && up / d <= 2) easy = { rn, rd: up, q: c.q, tier: c.tier, fact: c.fact, roundedUp: true };
   }
   if (!easy) easy = cands.find(c => c.rn === rn && c.tier === "easy" && c.rd >= rd)
     || cands.find(c => c.rn === rn && c.tier === "easy")
     || cands.find(c => c.tier === "easy") || cands[0] || null;
   if (easy && easy.rn === rn && easy.rd > rd) easy.roundedUp = true;
-  const borderline = cands.find(c => c.rn === rn && c.tier === "borderline" && !(easy && easy.rn === c.rn && easy.rd === c.rd)) || null;
+  const borderline = cands.find(c => c.rn === rn && c.rd !== rd && !(easy && easy.rn === c.rn && easy.rd === c.rd)) || null;   // a second pair that also works
   return { easy, borderline };
 }
 
@@ -573,7 +579,7 @@ function evaluateEstimate(N, d, raw) {
   r.checks.friendly = true; r.tier = c.tier;
   if (q !== c.q) { r.kind = "slip"; r.checks.math = false; return r; }
   r.checks.math = true;
-  if (String(q).length !== String(trueQ).length) {
+  if (!sameScale(q, trueQ)) {
     r.kind = "place"; r.checks.place = false;
     r.estPlace = placeOfNumber(q); r.truePlace = placeOfNumber(trueQ);
     r.suggestion = bestEstimate(N, d);
@@ -604,7 +610,7 @@ function estimateMessage(r, tries) {
       const a = sig(r.rn), b = sig(r.rd), c = r.pair;
       let why = "";
       if (c.reason === "digits") why = `${fmt(a.m > 99 ? r.rn : r.rd)} has too many digits that aren't zero.`;
-      else if (b.m > 9 && b.m !== 25) why = `${fmt(r.rd)} is a tricky number to divide by.`;
+      else if (b.m > 12 && b.m !== 15 && b.m !== 25 && b.m !== 75) why = `${fmt(r.rd)} is a tricky number to divide by.`;
       else if (c.reason === "uneven") why = `${a.m} isn't in the ${b.m}s facts, so it doesn't come out even.`;
       else if (c.reason === "fact") why = `That's not a basic division fact.`;
       else if (c.reason === "small") why = `${fmt(r.rn)} is smaller than ${fmt(r.rd)}.`;
@@ -636,7 +642,9 @@ function estimateMessage(r, tries) {
       if (r.friendlier) msg += ` An even friendlier pair next time: ${pair(r.friendlier.rn, r.friendlier.rd)}.`;
       return msg;
     }
-    case "pass": return `✓ Great estimate! You can do ${pair(r.rn, r.rd)} in your head, and ${fmt(r.q)} is in the ${placeOfNumber(r.q)}, just like the real answer will be.`;
+    case "pass": return String(r.q).length === String(r.trueQ).length
+      ? `✓ Great estimate! You can do ${pair(r.rn, r.rd)} in your head, and ${fmt(r.q)} is in the ${placeOfNumber(r.q)}, just like the real answer will be.`
+      : `✓ Great estimate! You can do ${pair(r.rn, r.rd)} in your head, and the real answer should be close to ${fmt(r.q)}.`;
   }
   return "";
 }

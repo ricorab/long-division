@@ -190,6 +190,36 @@
   button.yn { font-size: 1.5rem; padding: 14px 40px; min-width: 130px; }
   .ask b { font-size: 1.6rem; }
   .frac-labels { display: flex; flex-direction: column; justify-content: space-between; height: 5.2rem; font-size: 0.85rem; color: #777; font-family: system-ui, sans-serif; font-weight: normal; text-align: left; }
+
+  /* ===== Estimate gate + reasonableness ===== */
+  .est-sub { color: #555; font-size: 1.05rem; margin-bottom: 4px; }
+  .est-row { display: flex; align-items: flex-start; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .est-field { display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: text; }
+  .est-field input { font-size: 1.7rem; width: 120px; padding: 8px; border: 2px solid #ccc; border-radius: 8px; text-align: center; font-family: inherit; font-weight: bold; }
+  .est-field input:focus { outline: none; border-color: #0066cc; }
+  .est-field input.q { border-color: #0066cc; background: #f2f8ff; }
+  .est-field small { color: #666; font-size: 0.85rem; }
+  .est-op { font-size: 1.9rem; font-weight: bold; padding-top: 10px; color: #555; }
+  .est-checks { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 12px; }
+  .chk { padding: 4px 12px; border-radius: 999px; font-size: 0.95rem; background: #eef1f4; color: #888; border: 2px solid transparent; }
+  .chk.good { background: #e6f6ea; color: #1e7e34; border-color: #28a745; font-weight: bold; }
+  .chk.bad { background: #fff4e5; color: #a35a00; border-color: #f0ad4e; font-weight: bold; }
+  .feedback.coach { margin-top: 12px; background: #fff; border: 2px solid #f0ad4e; border-radius: 10px; padding: 12px 14px; font-size: 1.12rem; line-height: 1.5; text-align: left; font-weight: normal; color: #333; }
+  .feedback.coach.good { border-color: #28a745; }
+  .try-pair { display: inline-block; background: #e7f3ff; border-radius: 6px; padding: 0 6px; font-weight: bold; color: #0066cc; white-space: nowrap; }
+  .est-good { color: #1e7e34; font-weight: bold; font-size: 1.1rem; margin: 0 0 10px; line-height: 1.45; }
+  .est-good .try-pair { background: #e6f6ea; color: #1e7e34; }
+  .reason-compare { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; margin: 10px 0 4px; }
+  .reason-compare > div { background: white; border: 2px solid #ddd; border-radius: 10px; padding: 8px 18px; min-width: 130px; }
+  .reason-compare small { display: block; color: #666; font-size: 0.9rem; }
+  .reason-compare b { font-size: 1.8rem; color: #0066cc; }
+  .recheck { display: flex; flex-direction: column; gap: 10px; align-items: center; margin-top: 12px; }
+  .recheck button.pick { min-width: 280px; font-size: 1.2rem; padding: 14px 20px; background: white; color: #0066cc; border: 2px solid #0066cc; }
+  .recheck button.pick:hover { background: #f2f8ff; }
+  .recheck button.link { min-height: 44px; font-size: 1.1rem; padding: 8px 16px; }
+  @media (max-width: 480px) { .est-row { gap: 4px; } .est-field input { width: 88px; box-sizing: border-box; font-size: 1.4rem; padding: 8px 4px; } .est-op { font-size: 1.5rem; } .est-field small { font-size: 0.75rem; max-width: 90px; text-align: center; } }
+  .reason-ok { display: inline-flex; align-items: center; gap: 10px; margin-top: 10px; color: #1e7e34; font-size: 1.1rem; }
+  .reason-ok .big-check { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 50%; background: #28a745; color: white; font-size: 1.7rem; }
 </style>
 </head>
 <body>
@@ -419,11 +449,210 @@ function gateText(s) {
       ? `Bring the <strong>${s.digit}</strong> straight down (${s.place} place). Write it next to the ${s.diff} to make <strong>${s.newPartial}</strong>.`
       : `Bring the <strong>${s.digit}</strong> straight down (${s.place} place). Write it next to the 0. Now you have <strong>${s.newPartial}</strong>.`;
     case "remainder": return `Write ${fracHTML(s.num, s.den)} above the bracket, right after the <strong>${s.quotient}</strong>.`;
+    case "estimate": return s.rn ? `Write your estimate next to the problem: <strong>${fmt(s.rn)} ÷ ${fmt(s.rd)} = ${fmt(s.q)}</strong>, so the answer is about <strong>${fmt(s.q)}</strong>.` : "Write your estimate next to the problem.";
   }
   return "";
 }
 
-if (typeof module !== "undefined") module.exports = { gateText, buildSteps, checkStep, generateProblem, makeRng, parseWhole, placeName };
+
+/* ================= ESTIMATE GATE (pure) =================
+ * The kid types a rounded dividend, a rounded divisor and the quotient of those two.
+ * Checked separately, in this order:
+ *   close    – each rounded number is within ×½ … ×2 of the real one
+ *   friendly – the pair is a mental-math pair (explicit list, or a basic fact scaled by powers of ten)
+ *   math     – the kid divided the friendly pair correctly
+ *   place    – the estimate has the same place value as the real quotient (the pass bar)
+ */
+// Explicit friendly pairs (compared after crossing off the same zeros from both numbers).
+const FRIENDLY_PAIRS = [[10, 2], [10, 5], [20, 2], [25, 5], [50, 5], [50, 10], [100, 10], [100, 20], [100, 25],
+  [100, 50], [200, 20], [1000, 100], [50, 25], [75, 25], [30, 3], [40, 4], [60, 6], [80, 8], [90, 9]];
+function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+function sig(x) { let z = 0; while (x > 0 && x % 10 === 0) { x /= 10; z++; } return { m: x, z }; }
+function stripCommon(a, b) { while (a > 0 && b > 0 && a % 10 === 0 && b % 10 === 0) { a /= 10; b /= 10; } return [a, b]; }
+function inFriendlyList(rn, rd) {
+  const [a, b] = stripCommon(rn, rd);
+  return FRIENDLY_PAIRS.some(([x, y]) => { const [p, q] = stripCommon(x, y); return p === a && q === b; });
+}
+function placeOfNumber(q) { return PLACES[String(q).length - 1] || "higher"; }
+
+/* Is rn ÷ rd something a 5th grader can do in their head?  → {friendly, tier: "easy"|"borderline", q, fact, reason} */
+function classifyPair(rn, rd) {
+  if (!(rn > 0) || !(rd > 0)) return { friendly: false, reason: "zero" };
+  const a = sig(rn), b = sig(rd);
+  if (a.m > 99 || b.m > 99) return { friendly: false, reason: "digits" };
+  if (rn < rd) return { friendly: false, reason: "small" };
+  if (rn % rd !== 0) return { friendly: false, reason: "uneven" };
+  const q = rn / rd, qs = sig(q).m;
+  const fact = b.m <= 9 ? { F: b.m * qs, b: b.m, qs } : null;
+  if (inFriendlyList(rn, rd)) return { friendly: true, tier: "easy", q, fact };
+  if (b.m === 1) return { friendly: true, tier: "easy", q, fact: null };          // ÷ 10, 100, 1000: just cross off zeros
+  if (b.m <= 9 && qs <= 9) {                                                        // a times-table fact, scaled by tens
+    const F = b.m * qs;
+    const easy = F < 10 || F % 10 === 0 || b.m === 2;
+    return { friendly: true, tier: easy ? "easy" : "borderline", q, fact };
+  }
+  if (b.m === 25 && qs <= 8) return { friendly: true, tier: qs <= 4 ? "easy" : "borderline", q, fact: null, quarters: true }; // think quarters: 4 in 100
+  return { friendly: false, reason: "fact", q };
+}
+
+/* Every friendly rounding near N ÷ d, best first. */
+function estimateCandidates(N, d) {
+  N = Number(N);
+  const trueQ = Math.floor(N / d);
+  const rds = new Set([d]);
+  const p = Math.pow(10, String(d).length - 1);
+  for (let k = 1; k <= 10; k++) rds.add(k * p);
+  if (d >= 10) { rds.add(25); rds.add(50); }
+  const rns = new Set();
+  const pn = Math.pow(10, String(N).length - 1);
+  for (const P2 of [pn, pn / 10]) if (P2 >= 1) { rns.add(Math.floor(N / P2) * P2); rns.add(Math.ceil(N / P2) * P2); rns.add(Math.round(N / P2) * P2); }
+  const out = [], seen = new Set();
+  const plainRound = new Set(rns);   // straight roundings of N (others are "compatible numbers")
+  for (const rd of rds) {
+    if (rd <= 0 || rd / d < 0.6 || rd / d > 1.5) continue;
+    const local = new Set(rns);
+    for (let qs = 1; qs <= 9; qs++) for (let z = 0, t = 1; z <= 7; z++, t *= 10) local.add(rd * qs * t);
+    for (const rn of local) {
+      if (rn / N < 0.6 || rn / N > 1.6) continue;
+      const key = rn + "/" + rd; if (seen.has(key)) continue; seen.add(key);
+      const c = classifyPair(rn, rd);
+      if (!c.friendly) continue;
+      const placeMatch = String(c.q).length === String(trueQ).length;
+      const score = Math.abs(Math.log(rn / N)) + Math.abs(Math.log(rd / d)) + (c.tier === "borderline" ? 0.4 : 0) + (rd < d ? 0.15 : 0) + (rd === d ? -0.05 : 0) + (plainRound.has(rn) ? 0 : 0.2) + (placeMatch ? 0 : 5);
+      out.push({ rn, rd, q: c.q, tier: c.tier, fact: c.fact, placeMatch, score });
+    }
+  }
+  return out.sort((x, y) => x.score - y.score);
+}
+function bestEstimate(N, d) { return estimateCandidates(N, d).find(c => c.placeMatch) || null; }
+
+function parseEst(v) {
+  const s = String(v === undefined || v === null ? "" : v).replace(/[,\s]/g, "");
+  if (!/^\d{1,9}$/.test(s)) return null;
+  return parseInt(s, 10);
+}
+function nearbyRoundings(x) {
+  const p = Math.pow(10, String(x).length - 1);
+  const lo = Math.floor(x / p) * p, hi = Math.ceil(x / p) * p;
+  return lo === hi ? [lo] : [lo, hi].filter(v => v > 0);
+}
+
+/* Nudge for an unfriendly pair: a friendly pair (default) plus an optional borderline one. */
+function estimateNudge(N, d, rn, rd) {
+  const cands = estimateCandidates(N, d).filter(c => c.placeMatch);
+  let easy = null;
+  const sr = sig(rd);
+  if (sr.m > 9) {                                   // e.g. 150 → round UP to 200
+    const p = Math.pow(10, String(rd).length - 1), up = Math.ceil(rd / p) * p;
+    const c = classifyPair(rn, up);
+    const fits = c.friendly && String(c.q).length === String(Math.floor(N / d)).length;   // only nudge where it will pass
+    if (fits && rn / N >= 0.5 && rn / N <= 2 && up / d <= 2) easy = { rn, rd: up, q: c.q, tier: c.tier, fact: c.fact, roundedUp: true };
+  }
+  if (!easy) easy = cands.find(c => c.rn === rn && c.tier === "easy" && c.rd >= rd)
+    || cands.find(c => c.rn === rn && c.tier === "easy")
+    || cands.find(c => c.tier === "easy") || cands[0] || null;
+  if (easy && easy.rn === rn && easy.rd > rd) easy.roundedUp = true;
+  const borderline = cands.find(c => c.rn === rn && c.tier === "borderline" && !(easy && easy.rn === c.rn && easy.rd === c.rd)) || null;
+  return { easy, borderline };
+}
+
+/* Check one estimate attempt. raw = {rn, rd, q} (strings). */
+function evaluateEstimate(N, d, raw) {
+  N = Number(N); d = Number(d);
+  const rn = parseEst(raw && raw.rn), rd = parseEst(raw && raw.rd), q = parseEst(raw && raw.q);
+  const trueQ = Math.floor(N / d);
+  const r = { ok: false, N, d, rn, rd, q, trueQ, checks: { close: null, friendly: null, math: null, place: null } };
+  if (rn === null || rd === null || q === null) { r.kind = "nan"; return r; }
+  if (rd === 0 || rn === 0) { r.kind = rd === 0 ? "zeroDivisor" : "zeroDividend"; r.checks.close = false; return r; }
+  if (rn / N < 0.5 || rn / N > 2) { r.kind = "farDividend"; r.checks.close = false; r.nearby = nearbyRoundings(N); return r; }
+  if (rd / d < 0.5 || rd / d > 2) { r.kind = "farDivisor"; r.checks.close = false; r.nearby = nearbyRoundings(d); return r; }
+  r.checks.close = true;
+  const c = classifyPair(rn, rd);
+  r.pair = c;
+  if (!c.friendly) { r.kind = "unfriendly"; r.checks.friendly = false; r.nudge = estimateNudge(N, d, rn, rd); return r; }
+  r.checks.friendly = true; r.tier = c.tier;
+  if (q !== c.q) { r.kind = "slip"; r.checks.math = false; return r; }
+  r.checks.math = true;
+  if (String(q).length !== String(trueQ).length) {
+    r.kind = "place"; r.checks.place = false;
+    r.estPlace = placeOfNumber(q); r.truePlace = placeOfNumber(trueQ);
+    r.suggestion = bestEstimate(N, d);
+    return r;
+  }
+  r.checks.place = true; r.ok = true;
+  r.kind = c.tier === "borderline" ? "borderline" : "pass";
+  if (c.tier === "borderline") {
+    const f = estimateCandidates(N, d).filter(x => x.placeMatch && x.tier === "easy");
+    r.friendlier = f.find(x => x.rn === rn) || f.find(x => x.rd === rd) || f[0] || null;
+  }
+  return r;
+}
+
+/* Coaching message (HTML) for an estimate result. tries = attempts so far, including this one. */
+function estimateMessage(r, tries) {
+  tries = tries || 1;
+  const pair = (a, b) => `<span class="try-pair">${fmt(a)} ÷ ${fmt(b)}</span>`;
+  const factTail = c => c && c.fact ? ` (think ${c.fact.F} ÷ ${c.fact.b})` : (c && sig(c.rd).m === 1 ? " (just cross off zeros)" : "");
+  const knowIt = c => c && c.fact ? "is a fact you know" : "is easy to do in your head";
+  switch (r.kind) {
+    case "nan": return "Fill in all three boxes: your rounded dividend, your rounded divisor, and your estimate. Use whole numbers.";
+    case "zeroDivisor": return `We can't divide by 0! Round ${fmt(r.d)} to a number close to it, like ${nearbyRoundings(r.d).map(fmt).join(" or ")}.`;
+    case "zeroDividend": return `Round ${fmt(r.N)} to a number close to it, like ${nearbyRoundings(r.N).map(fmt).join(" or ")}.`;
+    case "farDividend": return `Hmm, ${fmt(r.rn)} is pretty far from ${fmt(r.N)}. Round to a number close to ${fmt(r.N)}, like ${r.nearby.map(fmt).join(" or ")}.`;
+    case "farDivisor": return `Hmm, ${fmt(r.rd)} is pretty far from ${fmt(r.d)}. Round to a number close to ${fmt(r.d)}, like ${r.nearby.map(fmt).join(" or ")}.`;
+    case "unfriendly": {
+      const a = sig(r.rn), b = sig(r.rd), c = r.pair;
+      let why = "";
+      if (c.reason === "digits") why = `${fmt(a.m > 99 ? r.rn : r.rd)} has too many digits that aren't zero.`;
+      else if (b.m > 9 && b.m !== 25) why = `${fmt(r.rd)} is a tricky number to divide by.`;
+      else if (c.reason === "uneven") why = `${a.m} isn't in the ${b.m}s facts, so it doesn't come out even.`;
+      else if (c.reason === "fact") why = `That's not a basic division fact.`;
+      else if (c.reason === "small") why = `${fmt(r.rn)} is smaller than ${fmt(r.rd)}.`;
+      let msg = `🤔 Can you do ${pair(r.rn, r.rd)} in your head? ${why}`;
+      const e = r.nudge.easy, bl = r.nudge.borderline;
+      msg += e && e.roundedUp ? " That's not quite a mental-math number — try rounding up." : " That's not quite a mental-math number — try a friendlier pair.";
+      if (e) {
+        if (e.rn === r.rn && e.rd > r.rd) msg += ` Round ${fmt(r.rd)} up to <b>${fmt(e.rd)}</b>: then ${pair(e.rn, e.rd)} ${knowIt(e)}${factTail(e)}.`;
+        else if (e.rn === r.rn) msg += ` Try ${pair(e.rn, e.rd)} instead${factTail(e)}.`;
+        else if (e.rd === r.rd) msg += ` Try rounding ${fmt(r.N)} to <b>${fmt(e.rn)}</b>: ${pair(e.rn, e.rd)}${factTail(e)}.`;
+        else msg += ` Try ${pair(e.rn, e.rd)}${factTail(e)}.`;
+      }
+      if (bl) msg += ` Or, if you know ${bl.fact ? `${bl.fact.F} ÷ ${bl.fact.b}` : "your quarters"}, ${pair(bl.rn, bl.rd)} might work too.`;
+      return msg;
+    }
+    case "slip": {
+      const [a, b] = stripCommon(r.rn, r.rd);
+      let msg = `✓ ${pair(r.rn, r.rd)} is a great mental-math pair! But check your division: it isn't ${fmt(r.q)}. Check it: ${fmt(r.q)} × ${fmt(r.rd)} = ${fmt(r.q * r.rd)}, not ${fmt(r.rn)}.`;
+      if (a !== r.rn) msg += ` Tip: cross off the same number of zeros from both. ${fmt(r.rn)} ÷ ${fmt(r.rd)} is the same as ${fmt(a)} ÷ ${fmt(b)}.`;
+      return msg;
+    }
+    case "place": {
+      let msg = `${fmt(r.rn)} ÷ ${fmt(r.rd)} = ${fmt(r.q)}: nice math! ✓ But ${fmt(r.q)} is in the <b>${r.estPlace}</b>, and the real answer to ${fmt(r.N)} ÷ ${fmt(r.d)} will be in the <b>${r.truePlace}</b>. Try rounding a different way.`;
+      if (tries >= 2 && r.suggestion) msg += ` Maybe try ${pair(r.suggestion.rn, r.suggestion.rd)}.`;
+      return msg;
+    }
+    case "borderline": {
+      let msg = `✓ Good estimate! ${pair(r.rn, r.rd)} works if you know ${r.pair.fact ? `${r.pair.fact.F} ÷ ${r.pair.fact.b} = ${r.pair.fact.qs}` : "your quarters (4 quarters make 100)"}.`;
+      if (r.friendlier) msg += ` An even friendlier pair next time: ${pair(r.friendlier.rn, r.friendlier.rd)}.`;
+      return msg;
+    }
+    case "pass": return `✓ Great estimate! You can do ${pair(r.rn, r.rd)} in your head, and ${fmt(r.q)} is in the ${placeOfNumber(r.q)}, just like the real answer will be.`;
+  }
+  return "";
+}
+
+/* Full lesson: estimate → paper gate → the algorithm → "is it reasonable?" → done. */
+function buildLesson(dividendStr, divisor) {
+  const B = buildSteps(dividendStr, divisor);
+  const N = parseInt(B.dividend, 10), trueQ = Math.floor(N / divisor);
+  const done = B.steps.pop();
+  B.steps.unshift({ type: "estimate", N, d: divisor, trueQ }, { type: "gate", kind: "estimate", N, d: divisor });
+  B.steps.push({ type: "reasonable", d: divisor, quotient: B.quotient, remainder: B.remainder, trueQ }, done);
+  return B;
+}
+
+if (typeof module !== "undefined") module.exports = { gateText, buildSteps, checkStep, generateProblem, makeRng, parseWhole, placeName,
+  FRIENDLY_PAIRS, classifyPair, estimateCandidates, bestEstimate, evaluateEstimate, estimateMessage, estimateNudge, buildLesson, parseEst, fmt };
 </script>
 
 <!-- ================= UI / STATE MACHINE ================= -->
@@ -500,8 +729,10 @@ function nextProblem() {
   loadProblem(p.dividend, p.divisor, "");
 }
 function loadProblem(dividend, divisor, tag) {
-  P = buildSteps(dividend, divisor);
+  P = buildLesson(dividend, divisor);
   P.tag = tag;
+  P.est = { rn: "", rd: "", q: "" };   // what the kid typed in the estimate boxes (kept when rewinding)
+  P.estResult = null; P.estimate = null; P.recheck = false; P.reasonableOk = false;
   idx = 0; attempts = {}; animIdx = -1; gateLock = false;
   document.getElementById("startScreen").classList.add("hidden");
   document.getElementById("mainScreen").classList.remove("hidden");
@@ -514,6 +745,15 @@ function advance() {               // called only after a validated answer / act
   if (idx >= P.steps.length - 1) return;
   animIdx = idx;
   idx++;
+  P.recheck = false;
+  render();
+}
+/* Jump back to an earlier state (used by "which step do you want to recheck?"). Work after it is cleared. */
+function rewindTo(i) {
+  if (!P || i < 0 || i >= idx) return;
+  Object.keys(attempts).forEach(k => { if (+k >= i) delete attempts[k]; });
+  idx = i; animIdx = -1; gateLock = false; P.recheck = false; P.reasonableOk = false;
+  if (P.steps[idx].type === "estimate") P.estResult = null;
   render();
 }
 function goBack() {                // rewind one state, clearing what was typed there
@@ -521,7 +761,8 @@ function goBack() {                // rewind one state, clearing what was typed 
   delete attempts[idx];
   idx--;
   delete attempts[idx];
-  animIdx = -1; gateLock = false;
+  animIdx = -1; gateLock = false; P.recheck = false; P.reasonableOk = false;
+  if (P.steps[idx].type === "estimate") P.estResult = null;
   render();
 }
 
@@ -565,6 +806,43 @@ function val(id) { const el = document.getElementById(id); return el ? el.value 
 
 function answerCompare(v) { const s = P.steps[idx]; if (s.type !== "compare") return; const r = checkStep(s, v); if (r.ok) advance(); else submitCompareWrong(s); }
 function submitCompareWrong(s) { const fb = document.getElementById("feedback"); fb.className = "feedback wrong"; fb.innerHTML = `Look again: ${s.diff} is less than ${s.d}. Tap <b>Yes</b>.`; }
+function submitEstimate() {
+  const s = P.steps[idx];
+  if (s.type !== "estimate") return;
+  P.est = { rn: val("estN"), rd: val("estD"), q: val("estQ") };
+  const r = evaluateEstimate(s.N, s.d, P.est);
+  attempts[idx] = (attempts[idx] || 0) + (r.kind === "nan" ? 0 : 1);
+  P.estResult = r;
+  if (r.ok) {
+    P.estimate = { rn: r.rn, rd: r.rd, q: r.q, kind: r.kind, msg: estimateMessage(r, attempts[idx]) };
+    Object.assign(P.steps[idx + 1], { rn: r.rn, rd: r.rd, q: r.q });
+    advance();
+    return;
+  }
+  render();
+  const focusId = r.kind === "nan" ? (["estN", "estD", "estQ"].find(id => !val(id).trim()) || "estN")
+    : r.checks.close === false ? (r.kind === "farDivisor" || r.kind === "zeroDivisor" ? "estD" : "estN")
+    : r.kind === "slip" ? "estQ" : r.kind === "unfriendly" ? (sig(r.rd).m > 9 ? "estD" : "estN") : "estN";
+  const el = document.getElementById(focusId); if (el) { el.focus(); el.select(); }
+}
+function estKey(e, nextId) {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  if (nextId && !document.getElementById(nextId).value.trim()) document.getElementById(nextId).focus(); else submitEstimate();
+}
+function answerReasonable(yes) {
+  if (P.steps[idx].type !== "reasonable") return;
+  if (yes) { P.reasonableOk = true; advance(); }
+  else { P.recheck = true; render(); }
+}
+function recheckOptions() {
+  const opts = [];
+  P.steps.forEach((s, i) => {
+    if (s.type === "estimate" && P.estimate) opts.push({ i, label: `My estimate (${fmt(P.estimate.rn)} ÷ ${fmt(P.estimate.rd)} = ${fmt(P.estimate.q)})` });
+    if (s.type === "check" && !s.leadingZero) opts.push({ i, label: `The ${s.expected} in the ${s.place} place` });
+  });
+  return opts;
+}
 function doBringDown() { if (P.steps[idx].type === "bring") advance(); }
 function gateTapped(cb) {
   if (!cb.checked || gateLock) return;
@@ -665,7 +943,7 @@ function renderBracket() {
     }
   });
   // remainder fraction written in the quotient row, right after the quotient (like on paper)
-  const showFrac = P.remainder > 0 && (cur.type === "done" || (cur.type === "gate" && cur.kind === "remainder"));
+  const showFrac = P.remainder > 0 && (cur.type === "done" || cur.type === "reasonable" || (cur.type === "gate" && cur.kind === "remainder"));
   if (showFrac) out.push(`<div class="cell qfrac${tgt.has(n + ",-1") ? " target" : ""}${animIdx === idx - 1 && cur.type === "gate" ? " pop" : ""}" style="left:${X(n) + 4}px;top:${Y(-1) - 6}px;width:${W * 1.3}px;height:${H + 8}px">${fracHTML(P.remainder, P.divisor)}</div>`);
   if (destHL) { const [c, r] = destHL.split(",").map(Number); cell(c, r, "", "dest"); }
 
@@ -673,7 +951,7 @@ function renderBracket() {
   // grow the mat as the work grows (keeps the step panel close on short Chromebook screens)
   let usedRow = 0;
   P.steps.forEach((st, i) => { if (i <= idx && typeof st.row === "number") usedRow = Math.max(usedRow, st.row); });
-  if (cur.type === "done" || cur.type === "remainder" || (cur.type === "gate" && cur.kind === "remainder")) usedRow = P.rows - 1;
+  if (cur.type === "done" || cur.type === "reasonable" || cur.type === "remainder" || (cur.type === "gate" && cur.kind === "remainder")) usedRow = P.rows - 1;
   const width = X(maxCol) + 8, height = Y(usedRow + 1) + 12;
   const el = document.getElementById("bracket");
   el.style.width = width + "px"; el.style.height = height + "px";
@@ -689,11 +967,12 @@ function stepNumber() {
 function renderLoop() {
   const s = P.steps[idx];
   let phase = s.type;
-  if (s.type === "gate") phase = { x: "check", quotient: "check", product: "multiply", diff: "subtract", bring: "bring", remainder: "remainder" }[s.kind];
+  if (s.type === "gate") phase = { x: "check", quotient: "check", product: "multiply", diff: "subtract", bring: "bring", remainder: "remainder", estimate: "estimate" }[s.kind];
   if (s.type === "done") phase = "";
   const names = [["check", "Check"], ["multiply", "Multiply"], ["subtract", "Subtract"], ["compare", "Compare"], ["bring", "Bring down"]];
-  let html = names.map(([k, t]) => `<span class="${phase === k ? "on" : ""}">${t}</span>`).join("<i>→</i>");
+  let html = `<span class="${phase === "estimate" ? "on" : ""}">Estimate</span><i>·</i>` + names.map(([k, t]) => `<span class="${phase === k ? "on" : ""}">${t}</span>`).join("<i>→</i>");
   if (phase === "remainder") html += `<i>→</i><span class="on">Remainder</span>`;
+  html += `<i>·</i><span class="${phase === "reasonable" ? "on" : ""}">Reasonable?</span>`;
   document.getElementById("loop").innerHTML = html;
 }
 
@@ -713,7 +992,31 @@ function render() {
   const inputBox = (label, w) => `<input id="answerInput" class="answer" inputmode="numeric" autocomplete="off" aria-label="${label}" onkeydown="if(event.key==='Enter') submitAnswer()">`;
   const checkBtn = `<button class="check" onclick="submitAnswer()">Check</button>`;
 
-  if (s.type === "check") {
+  if (s.type === "estimate") {
+    const e = P.est, r = P.estResult;
+    html += `<div class="ask">🧠 First, estimate!</div>`;
+    html += `<div class="est-sub">Round <b>${fmt(P.dividend)}</b> and <b>${P.divisor}</b> to numbers you can divide in your head.</div>`;
+    const field = (id, v, label, next, extra) => `<label class="est-field"><input id="${id}" class="${extra || ""}" inputmode="numeric" autocomplete="off" aria-label="${label}" value="${String(v).replace(/"/g, "")}" onkeydown="estKey(event, ${next ? `'${next}'` : "null"})"><small>${label}</small></label>`;
+    html += `<div class="est-row">${field("estN", e.rn, "rounded " + fmt(P.dividend), "estD")}<span class="est-op">÷</span>${field("estD", e.rd, "rounded " + P.divisor, "estQ")}<span class="est-op">=</span>${field("estQ", e.q, "your estimate", null, "q")}</div>`;
+    html += `<div class="input-area"><button class="check" id="estBtn" onclick="submitEstimate()">Check my estimate</button></div>`;
+    if (r && r.kind !== "nan") {
+      const chip = (v, t) => `<span class="chk ${v === true ? "good" : v === false ? "bad" : ""}">${v === true ? "✓ " : v === false ? "✗ " : ""}${t}</span>`;
+      html += `<div class="est-checks">${chip(r.checks.close, "Rounded close")}${chip(r.checks.friendly, "Mental-math numbers")}${chip(r.checks.math, "Division right")}${chip(r.checks.place, "Place value")}</div>`;
+    }
+    html += r ? `<div id="feedback" class="feedback coach">${estimateMessage(r, attempts[idx] || 1)}</div>` : `<div id="feedback" class="feedback"></div>`;
+  } else if (s.type === "reasonable") {
+    const E = P.estimate || { q: "?" };
+    if (!P.recheck) {
+      html += `<div class="ask">Is your answer reasonable compared to your estimate?</div>`;
+      html += `<div class="reason-compare"><div><small>Your answer</small><b>${P.quotient}${P.remainder > 0 ? " " + fracHTML(P.remainder, P.divisor) : ""}</b></div><div><small>Your estimate</small><b>≈ ${fmt(E.q)}</b></div></div>`;
+      html += `<div class="input-area"><button class="yn" id="reasYes" onclick="answerReasonable(true)">Yes</button><button class="yn" id="reasNo" onclick="answerReasonable(false)">No</button></div>`;
+      html += `<div class="mini-note">Are they in the same place value? Are they close?</div>`;
+    } else {
+      html += `<div class="ask">Good thinking: let's double-check! 🔍</div><div class="est-sub">Which step do you want to recheck?</div>`;
+      html += `<div class="recheck" id="recheck">${recheckOptions().map(o => `<button class="pick" onclick="rewindTo(${o.i})">${o.label}</button>`).join("")}<button class="link" id="recheckCancel" onclick="P.recheck=false;render()">← Back to the question</button></div>`;
+      html += `<div class="mini-note">We'll go back to that step. You'll redo the work from there.</div>`;
+    }
+  } else if (s.type === "check") {
     html += `<div class="ask">How many times does <b>${s.d}</b> go into <b>${s.partial}</b> without going over?</div>`;
     html += `<div class="input-area">${inputBox("How many times")}${checkBtn}</div>`;
     const tries = attempts[idx] || [];
@@ -746,6 +1049,7 @@ function render() {
       </div>${checkBtn}</div>
       <div id="feedback" class="feedback"></div>`;
   } else if (s.type === "gate") {
+    if (s.kind === "estimate" && P.estimate && animIdx === idx - 1) html += `<div class="est-good">${P.estimate.msg}</div>`;
     if (justAnswered) html += `<div class="feedback correct" style="margin:0 0 8px">${prev.type === "check" && prev.leadingZero ? "Right! It goes 0 times." : "Correct!"}</div>`;
     html += `<div class="gate-head">✏️ Write it on your paper</div><div class="gate-text">${gateText(s)}</div>
       <label class="gate-check"><input type="checkbox" id="gateBox" onchange="gateTapped(this)"> I wrote it</label>`;
@@ -757,14 +1061,15 @@ function render() {
   const fin = document.getElementById("final");
   if (s.type === "done") {
     fin.classList.remove("hidden");
-    fin.innerHTML = `<div style="font-size:1rem;font-weight:normal;margin-bottom:6px">🎉 You did it! Does your paper match?</div><div style="font-size:1.6rem">${answerHTML()}</div><div class="controls" style="margin-top:14px"><button id="nextBtn" class="big" onclick="nextProblem()">Next problem →</button></div>`;
+    fin.innerHTML = `<div style="font-size:1rem;font-weight:normal;margin-bottom:6px">🎉 You did it! Does your paper match?</div><div style="font-size:1.6rem">${answerHTML()}</div>${P.reasonableOk ? `<div class="reason-ok"><span class="big-check">✓</span><span>Reasonable! Your estimate was about ${fmt(P.estimate.q)}.</span></div>` : ""}<div class="controls" style="margin-top:14px"><button id="nextBtn" class="big" onclick="nextProblem()">Next problem →</button></div>`;
   } else fin.classList.add("hidden");
 
   document.getElementById("progress").textContent = `Progress: ${cur} / ${total}`;
   document.getElementById("backBtn").disabled = idx === 0;
 
   // focus the active control so Enter / Space works on a Chromebook
-  const focusEl = document.getElementById("answerInput") || document.getElementById("numIn") || document.getElementById("gateBox") || document.getElementById("yesBtn") || document.getElementById("bringBtn") || document.getElementById("nextBtn");
+  const firstEmpty = ["estN", "estD", "estQ"].map(id => document.getElementById(id)).find(el => el && !el.value);
+  const focusEl = firstEmpty || document.getElementById("estN") || document.getElementById("reasYes") || document.getElementById("answerInput") || document.getElementById("numIn") || document.getElementById("gateBox") || document.getElementById("yesBtn") || document.getElementById("bringBtn") || document.getElementById("nextBtn");
   if (focusEl) { focusEl.focus({ preventScroll: true }); }
   const target = s.type === "done" ? fin : document.querySelector("#mainScreen .controls");
   if (target.getBoundingClientRect().bottom > window.innerHeight) target.scrollIntoView({ block: "end", behavior: "smooth" });
